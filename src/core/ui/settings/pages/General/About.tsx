@@ -69,11 +69,6 @@ export default function About() {
             label: Strings.MODEL,
             version: debugInfo.device.model,
             icon: "MobilePhoneIcon"
-        },
-        {
-            label: Platform.select({ android: Strings.CODENAME, ios: Strings.MACHINE_ID })!,
-            version: debugInfo.device.codename,
-            icon: "TagIcon"
         }
     ];
 

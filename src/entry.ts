@@ -1,7 +1,8 @@
+import type { Metro } from "@metro/types";
 import { version } from "bunny-build-info";
 const { instead } = require("spitroast");
 
-// @ts-ignore - shut up fr
+// @ts-ignore - window is defined later in the bundle, so we assign it early
 globalThis.window = globalThis;
 
 async function initializeBunny() {
@@ -10,7 +11,7 @@ async function initializeBunny() {
         Object.freeze = Object.seal = Object;
 
         await require("@metro/internals/caches").initMetroCache();
-        await require(".").default();
+        require(".").default();
     } catch (e) {
         const { ClientInfoManager } = require("@lib/api/native/modules");
         const stack = e instanceof Error ? e.stack : undefined;
@@ -18,59 +19,110 @@ async function initializeBunny() {
         console.log(stack ?? e?.toString?.() ?? e);
         alert([
             "Failed to load Opti!\n",
-            `Build Number: ${ClientInfoManager.Build}`,
+            `Build Number: ${ClientInfoManager.getConstants().Build}`,
             `Opti: ${version}`,
             stack || e?.toString?.(),
         ].join("\n"));
     }
 }
 
-// @ts-ignore
-if (typeof globalThis.__r !== "undefined") {
-    initializeBunny();
-} else {
-    // We hold calls from the native side
-    function onceIndexRequired(originalRequire: any) {
-        const batchedBridge = window.__fbBatchedBridge;
+if (typeof window.__r === "undefined") {
+    // Used for storing the current require function for the global.__r getter defined below
+    var _requireFunc: any;
 
-        const callQueue = new Array<any>;
-        const unpatchHook = instead("callFunctionReturnFlushedQueue", batchedBridge, (args: any, orig: any) => {
-            if (args[0] === "AppRegistry" || !batchedBridge.getCallableModule(args[0])) {
-                callQueue.push(args);
-                return batchedBridge.flushedQueue();
+    // Calls from the native side are deferred until the index.ts(x) is loaded
+    interface DeferredQueue {
+        object: any;
+        method: string;
+        resume?: (queue: DeferredQueue) => void;
+        args: any[];
+    }
+
+    const deferredCalls: Array<DeferredQueue> = [];
+    const unpatches: Array<() => void> = [];
+
+    const deferMethodExecution = (
+        object: any, 
+        method: string, 
+        condition?: (...args: any[]) => boolean, 
+        resume?: (queue: DeferredQueue) => void, 
+        returnWith?: (queue: DeferredQueue) => any
+    ) => {
+        const restore = instead(method, object, function (this: any, args: any[], original: any) {
+            if (!condition || condition(...args)) {
+                const queue: DeferredQueue = { object, method, args, resume };
+                deferredCalls.push(queue);
+                return returnWith ? returnWith(queue) : undefined;
             }
 
-            return orig.apply(batchedBridge, args);
+            // If the condition is not met, we execute the original method immediately
+            return original.apply(this, args);
         });
+
+        unpatches.push(restore);
+    }
+
+    const resumeDeferred = () => {
+        for (const queue of deferredCalls) {
+            const { object, method, args, resume } = queue;
+
+            if (resume) {
+                resume(queue);
+            } else {
+                object[method](...args);
+            }
+        }
+
+        deferredCalls.length = 0;
+    }
+
+    const onceIndexRequired = (originalRequire: Metro.RequireFn) => {
+        // We hold calls from the native side
+        if (window.__fbBatchedBridge) {
+            const batchedBridge = window.__fbBatchedBridge;
+            deferMethodExecution(
+                batchedBridge,
+                "callFunctionReturnFlushedQueue",
+                // If the call is to AppRegistry, we want to defer it because it is not yet registered (Revenge delays it)
+                // Same goes to the non-callable modules, which are not registered yet, so we ensure that only registered ones can get through
+                (...args) => args[0] === "AppRegistry" || !batchedBridge.getCallableModule(args[0]),
+                ({ args }) => {
+                    if (batchedBridge.getCallableModule(args[0])) {
+                        batchedBridge.__callFunction(...args);
+                    }
+                },
+                () => batchedBridge.flushedQueue()
+            );
+        }
+
+        // Introduced since RN New Architecture
+        if (window.RN$AppRegistry) {
+            deferMethodExecution(window.RN$AppRegistry, "runApplication");
+        }
 
         const startDiscord = async () => {
             await initializeBunny();
-            unpatchHook();
-            originalRequire(0);
+            
+            for (const unpatch of unpatches) unpatch();
+            unpatches.length = 0;
 
-            callQueue.forEach(arg =>
-                batchedBridge.getCallableModule(arg[0])
-                && batchedBridge.__callFunction(...arg));
+            originalRequire(0);
+            resumeDeferred();
         };
 
         startDiscord();
     }
-
-    var _requireFunc: any; // We can't set properties to 'this' during __r set for some reason
 
     Object.defineProperties(globalThis, {
         __r: {
             configurable: true,
             get: () => _requireFunc,
             set(v) {
+                // _requireFunc is required here, because using 'this' here errors for some unknown reason
                 _requireFunc = function patchedRequire(a: number) {
                     // Initializing index.ts(x)
                     if (a === 0) {
-                        // https://github.com/facebook/metro/commit/1361405ffe6f1bdef54295addfef0f30523aaab2
-                        if (window.modules instanceof Map) {
-                            window.modules = Object.fromEntries([...window.modules]);
-                        }
-
+                        if (window.modules instanceof Map) window.modules = Object.fromEntries(window.modules);
                         onceIndexRequired(v);
                         _requireFunc = v;
                     } else return v(a);
@@ -89,4 +141,6 @@ if (typeof globalThis.__r !== "undefined") {
             set(v) { this.value = v; }
         }
     });
+} else {
+    initializeBunny();
 }
