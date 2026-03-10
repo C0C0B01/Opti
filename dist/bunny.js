@@ -4613,7 +4613,7 @@
       init_logger();
       init_toasts();
       import_react_native5 = __toESM(require_react_native());
-      versionHash = "4a444ef-local";
+      versionHash = "6935ea6-local";
     }
   });
 
@@ -15071,7 +15071,7 @@
             uri: pyoncord_default
           },
           render: () => Promise.resolve().then(() => (init_General(), General_exports)),
-          useTrailing: () => `(${"4a444ef-local"})`
+          useTrailing: () => `(${"6935ea6-local"})`
         },
         {
           key: "BUNNY_PLUGINS",
@@ -15568,7 +15568,7 @@
         alert([
           "Failed to load Opti!\n",
           `Build Number: ${ClientInfoManager.getConstants().Build}`,
-          `Opti: ${"4a444ef-local"}`,
+          `Opti: ${"6935ea6-local"}`,
           stack || e?.toString?.()
         ].join("\n"));
       }
